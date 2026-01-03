@@ -2,13 +2,11 @@
 import struct
 import sys
 import os
-import math
+from io import BytesIO
 
-import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from kaitaistruct import KaitaiStream
-from io import BytesIO
 
 # Add project root to path so we can import the generated parser
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -213,3 +211,181 @@ class TestHeaderByteOrder:
         assert h.flagmask == flagmask
         assert h.timecode == timecode
         assert h.keylength == keylength
+
+
+# --- Adjunct header helpers ---
+
+UNIT_CODES = st.integers(min_value=0, max_value=24)
+FILE_TYPES = st.sampled_from([1000, 2000, 3000, 4000, 5000, 6000])
+
+
+def build_adjunct_1000(endian, xstart, xdelta, xunits):
+    """Build 256-byte adjunct for type 1000."""
+    buf = bytearray(256)
+    struct.pack_into(f"{endian}d", buf, 0, xstart)
+    struct.pack_into(f"{endian}d", buf, 8, xdelta)
+    struct.pack_into(f"{endian}i", buf, 16, xunits)
+    return bytes(buf)
+
+
+def build_adjunct_2000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits):
+    """Build 256-byte adjunct for type 2000."""
+    buf = bytearray(256)
+    struct.pack_into(f"{endian}d", buf, 0, xstart)
+    struct.pack_into(f"{endian}d", buf, 8, xdelta)
+    struct.pack_into(f"{endian}i", buf, 16, xunits)
+    struct.pack_into(f"{endian}i", buf, 20, subsize)
+    struct.pack_into(f"{endian}d", buf, 24, ystart)
+    struct.pack_into(f"{endian}d", buf, 32, ydelta)
+    struct.pack_into(f"{endian}i", buf, 40, yunits)
+    return bytes(buf)
+
+
+def build_adjunct_3000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length):
+    """Build 256-byte adjunct for type 3000."""
+    buf = bytearray(256)
+    struct.pack_into(f"{endian}d", buf, 0, xstart)
+    struct.pack_into(f"{endian}d", buf, 8, xdelta)
+    struct.pack_into(f"{endian}i", buf, 16, xunits)
+    struct.pack_into(f"{endian}i", buf, 20, subsize)
+    struct.pack_into(f"{endian}d", buf, 24, ystart)
+    struct.pack_into(f"{endian}d", buf, 32, ydelta)
+    struct.pack_into(f"{endian}i", buf, 40, yunits)
+    struct.pack_into(f"{endian}i", buf, 44, record_length)
+    return bytes(buf)
+
+
+def build_adjunct_4000(endian, vrec_size):
+    """Build 256-byte adjunct for type 4000."""
+    buf = bytearray(256)
+    struct.pack_into(f"{endian}i", buf, 0, vrec_size)
+    return bytes(buf)
+
+
+def build_file_with_adjunct(head_rep, file_type, adjunct_bytes):
+    """Build a 512-byte Midas BLUE file with given type and adjunct bytes."""
+    endian = ">" if head_rep == "IEEE" else "<"
+    buf = bytearray(512)
+    buf[0:4] = b"BLUE"
+    buf[4:8] = head_rep.encode("ASCII")
+    buf[8:12] = b"IEEE"  # data_rep doesn't matter for this test
+    # type field at offset 48
+    struct.pack_into(f"{endian}i", buf, 48, file_type)
+    # format field at offset 52
+    buf[52:54] = b"SF"
+    # Write adjunct at offset 256
+    buf[256:512] = adjunct_bytes
+    return bytes(buf)
+
+
+# Feature: midas-blue-ksy, Property 3: Adjunct header dispatch by file type
+class TestAdjunctDispatch:
+    """Property 3: Adjunct header dispatch by file type.
+
+    For any valid Midas BLUE file with a type field in {1000, 2000, 3000,
+    4000, 5000, 6000}, the parser should read the adjunct header using the
+    subtype corresponding to that file type, and all fields within that
+    subtype should match the values written.
+    """
+
+    @given(head_rep=HEAD_REPS, xstart=F8, xdelta=F8, xunits=UNIT_CODES)
+    @settings(max_examples=200)
+    def test_adjunct_1000(self, head_rep, xstart, xdelta, xunits):
+        """Type 1000: xstart, xdelta, xunits."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        adjunct = build_adjunct_1000(endian, xstart, xdelta, xunits)
+        raw = build_file_with_adjunct(head_rep, 1000, adjunct)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct1000)
+        assert adj.xstart == xstart
+        assert adj.xdelta == xdelta
+        assert adj.xunits == MidasBlue.UnitCode(xunits)
+
+    @given(
+        head_rep=HEAD_REPS, xstart=F8, xdelta=F8, xunits=UNIT_CODES,
+        subsize=S4, ystart=F8, ydelta=F8, yunits=UNIT_CODES,
+    )
+    @settings(max_examples=200)
+    def test_adjunct_2000(self, head_rep, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits):
+        """Type 2000: xstart, xdelta, xunits, subsize, ystart, ydelta, yunits."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        adjunct = build_adjunct_2000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits)
+        raw = build_file_with_adjunct(head_rep, 2000, adjunct)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct2000)
+        assert adj.xstart == xstart
+        assert adj.xdelta == xdelta
+        assert adj.xunits == MidasBlue.UnitCode(xunits)
+        assert adj.subsize == subsize
+        assert adj.ystart == ystart
+        assert adj.ydelta == ydelta
+        assert adj.yunits == MidasBlue.UnitCode(yunits)
+
+    @given(
+        head_rep=HEAD_REPS, xstart=F8, xdelta=F8, xunits=UNIT_CODES,
+        subsize=S4, ystart=F8, ydelta=F8, yunits=UNIT_CODES, record_length=S4,
+    )
+    @settings(max_examples=200)
+    def test_adjunct_3000(self, head_rep, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length):
+        """Type 3000: xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        adjunct = build_adjunct_3000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length)
+        raw = build_file_with_adjunct(head_rep, 3000, adjunct)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct3000)
+        assert adj.xstart == xstart
+        assert adj.xdelta == xdelta
+        assert adj.xunits == MidasBlue.UnitCode(xunits)
+        assert adj.subsize == subsize
+        assert adj.ystart == ystart
+        assert adj.ydelta == ydelta
+        assert adj.yunits == MidasBlue.UnitCode(yunits)
+        assert adj.record_length == record_length
+
+    @given(head_rep=HEAD_REPS, vrec_size=S4)
+    @settings(max_examples=200)
+    def test_adjunct_4000(self, head_rep, vrec_size):
+        """Type 4000: vrec_size and reserved."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        adjunct = build_adjunct_4000(endian, vrec_size)
+        raw = build_file_with_adjunct(head_rep, 4000, adjunct)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct4000)
+        assert adj.vrec_size == vrec_size
+        assert len(adj.reserved) == 252
+
+    @given(
+        head_rep=HEAD_REPS, xstart=F8, xdelta=F8, xunits=UNIT_CODES,
+        subsize=S4, ystart=F8, ydelta=F8, yunits=UNIT_CODES, record_length=S4,
+    )
+    @settings(max_examples=200)
+    def test_adjunct_5000(self, head_rep, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length):
+        """Type 5000: same layout as 3000."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        adjunct = build_adjunct_3000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, yunits, record_length)
+        raw = build_file_with_adjunct(head_rep, 5000, adjunct)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct5000)
+        assert adj.xstart == xstart
+        assert adj.xdelta == xdelta
+        assert adj.xunits == MidasBlue.UnitCode(xunits)
+        assert adj.subsize == subsize
+        assert adj.ystart == ystart
+        assert adj.ydelta == ydelta
+        assert adj.yunits == MidasBlue.UnitCode(yunits)
+        assert adj.record_length == record_length
+
+    @given(head_rep=HEAD_REPS, raw_data=st.binary(min_size=256, max_size=256))
+    @settings(max_examples=200)
+    def test_adjunct_6000(self, head_rep, raw_data):
+        """Type 6000: 256 bytes of raw data."""
+        raw = build_file_with_adjunct(head_rep, 6000, raw_data)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+        adj = parsed.adjunct
+        assert isinstance(adj, MidasBlue.Adjunct6000)
+        assert adj.raw_data == raw_data
