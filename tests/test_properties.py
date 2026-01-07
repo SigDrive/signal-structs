@@ -389,3 +389,42 @@ class TestAdjunctDispatch:
         adj = parsed.adjunct
         assert isinstance(adj, MidasBlue.Adjunct6000)
         assert adj.raw_data == raw_data
+
+
+# Feature: midas-blue-ksy, Property 4: Format digraph extraction
+class TestFormatDigraphExtraction:
+    """Property 4: Format digraph extraction.
+
+    For any valid 2-character format digraph string, the parser should
+    extract the first character as the size code and the second character
+    as the type code, such that recombining them produces the original
+    digraph.
+    """
+
+    @given(
+        head_rep=HEAD_REPS,
+        size_char=st.sampled_from(FORMAT_SIZE_CHARS),
+        type_char=st.sampled_from(FORMAT_TYPE_CHARS),
+    )
+    @settings(max_examples=200)
+    def test_format_digraph_extraction(
+        self, head_rep, size_char, type_char
+    ):
+        """Generate files with random format digraphs, verify
+        format_size and format_type extract the correct characters."""
+        digraph = size_char + type_char
+        endian = ">" if head_rep == "IEEE" else "<"
+        buf = bytearray(512)
+        buf[0:4] = b"BLUE"
+        buf[4:8] = head_rep.encode("ASCII")
+        buf[8:12] = b"IEEE"
+        struct.pack_into(f"{endian}i", buf, 48, 1000)
+        buf[52:54] = digraph.encode("ASCII")
+
+        parsed = MidasBlue(KaitaiStream(BytesIO(bytes(buf))))
+        h = parsed.header
+
+        assert h.format == digraph
+        assert h.format_size == size_char
+        assert h.format_type == type_char
+        assert h.format_size + h.format_type == digraph
