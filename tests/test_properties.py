@@ -428,3 +428,53 @@ class TestFormatDigraphExtraction:
         assert h.format_size == size_char
         assert h.format_type == type_char
         assert h.format_size + h.format_type == digraph
+
+
+# Feature: midas-blue-ksy, Property 5: Data block positioning and content
+class TestDataBlockPositioning:
+    """Property 5: Data block positioning and content.
+
+    For any valid Midas BLUE file with known data_start, data_size, and
+    data content, the parser's data block should start at exactly
+    data_start bytes from the beginning of the file, have a length of
+    exactly data_size bytes, and contain byte content identical to what
+    was written at that region.
+    """
+
+    @given(
+        head_rep=HEAD_REPS,
+        data_content=st.binary(min_size=1, max_size=1024),
+        data_start_offset=st.integers(min_value=512, max_value=2048),
+    )
+    @settings(max_examples=200)
+    def test_data_block_positioning(
+        self, head_rep, data_content, data_start_offset
+    ):
+        """Generate files with known data_start, data_size, and data
+        content, parse and verify data_block bytes match."""
+        endian = ">" if head_rep == "IEEE" else "<"
+        data_size = len(data_content)
+        total_size = data_start_offset + data_size
+
+        buf = bytearray(total_size)
+        # Fixed header
+        buf[0:4] = b"BLUE"
+        buf[4:8] = head_rep.encode("ASCII")
+        buf[8:12] = b"IEEE"
+        struct.pack_into(f"{endian}i", buf, 48, 1000)
+        buf[52:54] = b"SF"
+        struct.pack_into(
+            f"{endian}d", buf, 32, float(data_start_offset)
+        )
+        struct.pack_into(
+            f"{endian}d", buf, 40, float(data_size)
+        )
+
+        # Write known data content at data_start_offset
+        buf[data_start_offset:data_start_offset + data_size] = (
+            data_content
+        )
+
+        parsed = MidasBlue(KaitaiStream(BytesIO(bytes(buf))))
+        assert parsed.data_block == data_content
+        assert len(parsed.data_block) == data_size

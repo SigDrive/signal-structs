@@ -31,6 +31,9 @@ instances:
         'file_type::type_5000_records_mod': adjunct_5000
         'file_type::type_6000_desc_words': adjunct_6000
         _: adjunct_unknown
+  data_block:
+    pos: header.data_start.to_i
+    size: header.data_size.to_i
 types:
   fixed_header_body:
     meta:
