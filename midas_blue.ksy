@@ -34,6 +34,11 @@ instances:
   data_block:
     pos: header.data_start.to_i
     size: header.data_size.to_i
+  extended_header:
+    pos: header.ext_start * 512
+    size: header.ext_size
+    type: extended_header_block
+    if: header.ext_start > 0 and header.ext_size > 0
 types:
   fixed_header_body:
     meta:
@@ -212,6 +217,43 @@ types:
     seq:
       - id: raw_data
         size: 256
+  extended_header_block:
+    meta:
+      endian:
+        switch-on: _root.head_rep
+        cases:
+          '"IEEE"': be
+          '"EEEI"': le
+    seq:
+      - id: entries
+        type: keyword_entry
+        repeat: eos
+  keyword_entry:
+    meta:
+      endian:
+        switch-on: _root.head_rep
+        cases:
+          '"IEEE"': be
+          '"EEEI"': le
+    seq:
+      - id: lkey
+        type: u4
+      - id: lext
+        type: u2
+      - id: ltag
+        type: u1
+      - id: kw_type
+        type: str
+        size: 1
+        encoding: ASCII
+      - id: value
+        size: lkey - lext
+      - id: tag
+        type: str
+        size: ltag
+        encoding: ASCII
+      - id: padding
+        size: (8 - ((4 + 2 + 1 + 1 + (lkey - lext) + ltag) % 8)) % 8
 enums:
   file_type:
     1000: type_1000_1d

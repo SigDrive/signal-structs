@@ -108,9 +108,9 @@ def build_midas_blue_bytes(fields):
     return bytes(buf)
 
 
-# Feature: midas-blue-ksy, Property 1: Fixed header field round-trip
+# Fixed header field round-trip
 class TestFixedHeaderRoundTrip:
-    """Property 1: Fixed header field round-trip.
+    """Fixed header field round-trip.
 
     For any valid 256-byte Midas BLUE fixed header, parsing it with the
     generated parser should produce field values identical to the values
@@ -154,9 +154,9 @@ class TestFixedHeaderRoundTrip:
         assert h.keywords == fields["keywords"]
 
 
-# Feature: midas-blue-ksy, Property 2: Header byte order correctness
+# Header byte order correctness
 class TestHeaderByteOrder:
-    """Property 2: Header byte order correctness.
+    """Header byte order correctness.
 
     For any valid Midas BLUE file where head_rep is either IEEE or EEEI,
     all numeric fields in the fixed header should be interpreted using the
@@ -278,9 +278,9 @@ def build_file_with_adjunct(head_rep, file_type, adjunct_bytes):
     return bytes(buf)
 
 
-# Feature: midas-blue-ksy, Property 3: Adjunct header dispatch by file type
+# Adjunct header dispatch by file type
 class TestAdjunctDispatch:
-    """Property 3: Adjunct header dispatch by file type.
+    """Adjunct header dispatch by file type.
 
     For any valid Midas BLUE file with a type field in {1000, 2000, 3000,
     4000, 5000, 6000}, the parser should read the adjunct header using the
@@ -391,9 +391,9 @@ class TestAdjunctDispatch:
         assert adj.raw_data == raw_data
 
 
-# Feature: midas-blue-ksy, Property 4: Format digraph extraction
+# Format digraph extraction
 class TestFormatDigraphExtraction:
-    """Property 4: Format digraph extraction.
+    """Format digraph extraction.
 
     For any valid 2-character format digraph string, the parser should
     extract the first character as the size code and the second character
@@ -430,9 +430,9 @@ class TestFormatDigraphExtraction:
         assert h.format_size + h.format_type == digraph
 
 
-# Feature: midas-blue-ksy, Property 5: Data block positioning and content
+# Data block positioning and content
 class TestDataBlockPositioning:
-    """Property 5: Data block positioning and content.
+    """Data block positioning and content.
 
     For any valid Midas BLUE file with known data_start, data_size, and
     data content, the parser's data block should start at exactly
@@ -444,7 +444,7 @@ class TestDataBlockPositioning:
     @given(
         head_rep=HEAD_REPS,
         data_content=st.binary(min_size=1, max_size=1024),
-        data_start_offset=st.integers(min_value=512, max_value=2048),
+        data_start_offset=st.integers(min_value=512, max_value=2048),  
     )
     @settings(max_examples=200)
     def test_data_block_positioning(
@@ -478,3 +478,145 @@ class TestDataBlockPositioning:
         parsed = MidasBlue(KaitaiStream(BytesIO(bytes(buf))))
         assert parsed.data_block == data_content
         assert len(parsed.data_block) == data_size
+
+
+# --- Extended header helpers ---
+
+# Valid ASCII chars for keyword type field
+KW_TYPE_CHARS = list("ABCDILFX")
+
+
+def build_keyword_entry(endian, tag_str, kw_type_char, value_bytes):
+    """Build a single keyword entry with proper 8-byte alignment.
+
+    Returns the raw bytes for one keyword entry.
+    """
+    ltag = len(tag_str)
+    lext = len(value_bytes) + 8  # lext = value_len + fixed portion (4+2+1+1)
+    # Wait per the spec: lkey is total keyword length, lext is length of
+    # the fixed portion. value size = lkey - lext.
+    # So: lkey = lext + len(value_bytes), and lext >= 8 (the fixed 4+2+1+1).
+    # The design says: lext (length of fixed portion: 4+2+1+1 = 8)
+    # value = lkey - lext bytes
+    # So lext = 8 (always), lkey = 8 + len(value_bytes)
+    lext = 8
+    lkey = lext + len(value_bytes)
+
+    # Build the entry
+    buf = bytearray()
+    buf += struct.pack(f"{endian}I", lkey)       # lkey: u4
+    buf += struct.pack(f"{endian}H", lext)       # lext: u2
+    buf += struct.pack("B", ltag)                # ltag: u1
+    buf += kw_type_char.encode("ASCII")          # type: 1 byte ASCII
+    buf += value_bytes                           # value: lkey - lext bytes
+    buf += tag_str.encode("ASCII")               # tag: ltag bytes
+
+    # Padding to 8-byte alignment
+    total = 4 + 2 + 1 + 1 + len(value_bytes) + ltag
+    pad = (8 - (total % 8)) % 8
+    buf += b'\x00' * pad
+
+    return bytes(buf)
+
+
+@st.composite
+def keyword_entries_list(draw):
+    """Generate a list of 1-5 keyword entries with random valid fields."""
+    n = draw(st.integers(min_value=1, max_value=5))
+    entries = []
+    for _ in range(n):
+        # Tag: 1-20 ASCII uppercase letters
+        tag_str = draw(st.text(
+            alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            min_size=1, max_size=20,
+        ))
+        kw_type_char = draw(st.sampled_from(KW_TYPE_CHARS))
+        # Value: 1-50 random bytes
+        value_bytes = draw(st.binary(min_size=1, max_size=50))
+        entries.append((tag_str, kw_type_char, value_bytes))
+    return entries
+
+
+def build_file_with_extended_header(head_rep, entries_data):
+    """Build a Midas BLUE file with an extended header containing keyword entries.
+
+    entries_data: list of (tag_str, kw_type_char, value_bytes) tuples
+    Returns (file_bytes, entries_data) for verification.
+    """
+    endian = ">" if head_rep == "IEEE" else "<"
+
+    # Build extended header bytes
+    ext_bytes = bytearray()
+    for tag_str, kw_type_char, value_bytes in entries_data:
+        ext_bytes += build_keyword_entry(endian, tag_str, kw_type_char, value_bytes)
+
+    ext_size = len(ext_bytes)
+    # Extended header starts at ext_start * 512. Put it right after HCB.
+    ext_start = 1  # = 512 bytes offset
+    ext_offset = ext_start * 512
+
+    # data_start after extended header (not accessed in this test)
+    data_start = ext_offset + ext_size
+    # Align data_start to next byte (no alignment needed, just after ext)
+    data_size = 0
+
+    total_size = ext_offset + ext_size
+    buf = bytearray(total_size)
+
+    # Fixed header
+    buf[0:4] = b"BLUE"
+    buf[4:8] = head_rep.encode("ASCII")
+    buf[8:12] = b"IEEE"
+    struct.pack_into(f"{endian}i", buf, 24, ext_start)
+    struct.pack_into(f"{endian}i", buf, 28, ext_size)
+    struct.pack_into(f"{endian}d", buf, 32, float(data_start))
+    struct.pack_into(f"{endian}d", buf, 40, float(data_size))
+    struct.pack_into(f"{endian}i", buf, 48, 1000)
+    buf[52:54] = b"SF"
+
+    # Write extended header at offset 512
+    buf[ext_offset:ext_offset + ext_size] = ext_bytes
+
+    return bytes(buf)
+
+
+# Keyword entry parsing with 8-byte alignment
+class TestKeywordEntryParsing:
+    """Keyword entry parsing with 8-byte alignment.
+
+    For any valid extended header containing a sequence of keyword entries
+    (each with random valid lkey, lext, ltag, type, value, and tag), the
+    parser should read each entry's fields correctly and advance to the
+    next 8-byte-aligned boundary, consuming exactly ext_size bytes total.
+    """
+
+    @given(head_rep=HEAD_REPS, entries_data=keyword_entries_list())
+    @settings(max_examples=200)
+    def test_keyword_entry_alignment(self, head_rep, entries_data):
+        """Generate extended headers with random keyword entries, parse
+        and verify each entry's fields and 8-byte alignment."""
+        raw = build_file_with_extended_header(head_rep, entries_data)
+        parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
+
+        ext = parsed.extended_header
+        assert ext is not None
+        assert len(ext.entries) == len(entries_data)
+
+        for i, (tag_str, kw_type_char, value_bytes) in enumerate(entries_data):
+            entry = ext.entries[i]
+
+            # Verify field values match what was written
+            lext_expected = 8
+            lkey_expected = lext_expected + len(value_bytes)
+
+            assert entry.lkey == lkey_expected
+            assert entry.lext == lext_expected
+            assert entry.ltag == len(tag_str)
+            assert entry.kw_type == kw_type_char
+            assert entry.value == value_bytes
+            assert entry.tag == tag_str
+
+            # Verify padding achieves 8-byte alignment
+            total = 4 + 2 + 1 + 1 + len(value_bytes) + len(tag_str)
+            expected_pad = (8 - (total % 8)) % 8
+            assert len(entry.padding) == expected_pad
