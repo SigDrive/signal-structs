@@ -10,8 +10,34 @@ __pycache__/
 # Pytest
 .pytest_cache/
 
-# Kaitai generated parser (regenerable)
+# Kaitai generated parsers (regenerable via ksc -t <target> midas_blue.ksy)
 midas_blue.py
+midas_blue.cpp
+midas_blue.h
+midas_blue.dot
+midas_blue.go
+midas_blue.html
+midas_blue.lua
+midas_blue.nim
+midas_blue.rb
+midas_blue.rs
+MidasBlue.cs
+MidasBlue.java
+MidasBlue.js
+MidasBlue.php
+MidasBlue.pm
+cpp_stl_11/
+cpp_stl_98/
+csharp/
+graphviz/
+html/
+javascript/
+lua/
+nim/
+perl/
+php/
+ruby/
+rust/
 
 # IDE
 .vscode/
