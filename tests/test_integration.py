@@ -473,7 +473,65 @@ class TestCrossValidation:
 
 
 # ---------------------------------------------------------------------------
-# KSY compiles to all targets
+# cdif file: type 1001 (non-standard), CF format, with extended header
+# ---------------------------------------------------------------------------
+class TestCdifFile:
+    """Verify the .cdif Midas BLUE file parses correctly."""
+
+    @pytest.fixture(autouse=True)
+    def parsed(self):
+        self.p = parse_file("2025-06-20_18-35-52_906858500hz.cdif")
+
+    def test_version(self):
+        assert self.p.version == "BLUE"
+
+    def test_head_rep(self):
+        assert self.p.head_rep == "EEEI"
+
+    def test_data_rep(self):
+        assert self.p.data_rep == "EEEI"
+
+    def test_type(self):
+        # type 1001 is not in the standard enum, raw int value
+        assert self.p.header.type == 1001
+
+    def test_format(self):
+        assert self.p.header.format == "CF"
+
+    def test_data_start(self):
+        assert self.p.header.data_start == 512.0
+
+    def test_data_size(self):
+        assert self.p.header.data_size == 9034936.0
+
+    def test_data_block(self):
+        assert len(self.p.data_block) == 9034936
+
+    def test_ext_start(self):
+        assert self.p.header.ext_start == 17648
+
+    def test_ext_size(self):
+        assert self.p.header.ext_size == 2056
+
+    def test_extended_header_exists(self):
+        ext = self.p.extended_header
+        assert ext is not None
+
+    def test_keyword_count(self):
+        assert len(self.p.extended_header.entries) == 62
+
+    def test_adjunct_is_unknown(self):
+        """Type 1001 should fall through to the default adjunct case."""
+        adj = self.p.adjunct
+        # Should be raw bytes (unknown type), not a named adjunct subtype
+        assert hasattr(adj, 'raw_data') or isinstance(adj, bytes) or type(adj).__name__ == 'AdjunctUnknown'
+
+    def test_timecode(self):
+        assert self.p.header.timecode == 2381596552.0
+
+
+# ---------------------------------------------------------------------------
+# 9.5  KSY compiles to all targets
 # ---------------------------------------------------------------------------
 class TestKscCompilation:
     """Validate KSY compiles to all targets with ksc."""

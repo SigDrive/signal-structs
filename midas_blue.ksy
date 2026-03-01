@@ -1,6 +1,9 @@
 meta:
   id: midas_blue
-  file-extension: tmp
+  file-extension:
+    - tmp
+    - blue
+    - cdif
 seq:
   - id: version
     type: str
