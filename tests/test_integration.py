@@ -61,7 +61,7 @@ class TestSinTmp:
         assert self.p.header.data_size == 32768.0
 
     def test_type(self):
-        assert self.p.header.type == MidasBlue.FileType.type_1000_1d
+        assert self.p.header.type == MidasBlue.FileType.type_1000_scalar_1d
 
     def test_format(self):
         assert self.p.header.format == "SD"
@@ -161,7 +161,7 @@ class TestPulseCxTmp:
         assert self.p.header.data_size == 1600.0
 
     def test_type(self):
-        assert self.p.header.type == MidasBlue.FileType.type_1000_1d
+        assert self.p.header.type == MidasBlue.FileType.type_1000_scalar_1d
 
     def test_format(self):
         assert self.p.header.format == "CF"
@@ -254,7 +254,7 @@ class TestKeywordTestFileTmp:
         assert self.p.header.data_size == 0.0
 
     def test_type(self):
-        assert self.p.header.type == MidasBlue.FileType.type_1000_1d
+        assert self.p.header.type == MidasBlue.FileType.type_1000_scalar_1d
 
     def test_format(self):
         assert self.p.header.format == "SB"
@@ -281,8 +281,9 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 16
         assert e.lext == 15
         assert e.ltag == 6
-        # value is 1 byte: 0x7b = 123
-        assert e.value == b"{"
+        # value is 1 byte: 0x7b = 123, typed as int8 array
+        assert e.value.values == [123]
+        assert e._raw_value == b"{"
 
     def test_keyword_i_test(self):
         e = self.p.extended_header.entries[1]
@@ -291,8 +292,8 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 16
         assert e.lext == 14
         assert e.ltag == 6
-        # value is 2 bytes LE: 1337
-        assert struct.unpack("<h", e.value)[0] == 1337
+        # value is 2 bytes LE: 1337, typed as int16 array
+        assert e.value.values == [1337]
 
     def test_keyword_l_test(self):
         e = self.p.extended_header.entries[2]
@@ -301,7 +302,7 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 24
         assert e.lext == 20
         assert e.ltag == 6
-        assert struct.unpack("<i", e.value)[0] == 113355
+        assert e.value.values == [113355]
 
     def test_keyword_x_test(self):
         e = self.p.extended_header.entries[3]
@@ -310,7 +311,7 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 24
         assert e.lext == 16
         assert e.ltag == 6
-        assert struct.unpack("<q", e.value)[0] == 987654321
+        assert e.value.values == [987654321]
 
     def test_keyword_f_test(self):
         e = self.p.extended_header.entries[4]
@@ -319,7 +320,7 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 24
         assert e.lext == 20
         assert e.ltag == 6
-        assert abs(struct.unpack("<f", e.value)[0] - 0.12345) < 1e-4
+        assert abs(e.value.values[0] - 0.12345) < 1e-4
 
     def test_keyword_d_test(self):
         e = self.p.extended_header.entries[5]
@@ -328,7 +329,7 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 24
         assert e.lext == 16
         assert e.ltag == 6
-        assert abs(struct.unpack("<d", e.value)[0] - 9.87654321) < 1e-8
+        assert abs(e.value.values[0] - 9.87654321) < 1e-8
 
     def test_keyword_o_test(self):
         e = self.p.extended_header.entries[6]
@@ -337,25 +338,29 @@ class TestKeywordTestFileTmp:
         assert e.lkey == 16
         assert e.lext == 15
         assert e.ltag == 6
+        # 'O' (offset byte) is not one of the interpreted types, so value
+        # stays as raw bytes.
         assert e.value == b"\xff"
 
     def test_keyword_string_test(self):
         e = self.p.extended_header.entries[7]
         assert e.tag == "STRING_TEST"
         assert e.kw_type == "A"
-        assert e.value == b"Hello World"
+        assert e.value.text == "Hello World"
+        assert e._raw_value == b"Hello World"
 
     def test_keyword_b_test2(self):
         e = self.p.extended_header.entries[8]
         assert e.tag == "B_TEST2"
         assert e.kw_type == "B"
-        assert e.value == b"c"
+        assert e.value.values == [99]
+        assert e._raw_value == b"c"
 
     def test_keyword_string_test_goodbye(self):
         e = self.p.extended_header.entries[9]
         assert e.tag == "STRING_TEST"
         assert e.kw_type == "A"
-        assert e.value == b"Goodbye World"
+        assert e.value.text == "Goodbye World"
 
     def test_keyword_alignment(self):
         """Verify all keyword entries have proper 8-byte alignment padding."""
@@ -386,7 +391,7 @@ class TestCrossValidation:
         assert p.head_rep == "EEEI"
         assert p.data_rep == "EEEI"
         # MATLAB: hcb.type = 1000, hcb.format = 'SD'
-        assert h.type == MidasBlue.FileType.type_1000_1d
+        assert h.type == MidasBlue.FileType.type_1000_scalar_1d
         assert h.format == "SD"
         # MATLAB: hcb.data_start = 512, hcb.data_size = 32768
         assert h.data_start == 512.0
@@ -412,7 +417,7 @@ class TestCrossValidation:
         assert p.version == "BLUE"
         assert p.head_rep == "EEEI"
         assert p.data_rep == "EEEI"
-        assert h.type == MidasBlue.FileType.type_1000_1d
+        assert h.type == MidasBlue.FileType.type_1000_scalar_1d
         assert h.format == "CF"
         assert h.data_start == 512.0
         assert h.data_size == 1600.0
@@ -443,7 +448,7 @@ class TestCrossValidation:
         assert p.version == "BLUE"
         assert p.head_rep == "EEEI"
         assert p.data_rep == "EEEI"
-        assert h.type == MidasBlue.FileType.type_1000_1d
+        assert h.type == MidasBlue.FileType.type_1000_scalar_1d
         assert h.format == "SB"
         assert h.data_start == 512.0
         assert h.data_size == 0.0
@@ -455,21 +460,21 @@ class TestCrossValidation:
         assert len(ext.entries) == 10
         # MATLAB cross-validation of interpreted keyword values:
         # B_TEST = 123 (int8)
-        assert struct.unpack("<b", ext.entries[0].value)[0] == 123
+        assert ext.entries[0].value.values[0] == 123
         # I_TEST = 1337 (int16)
-        assert struct.unpack("<h", ext.entries[1].value)[0] == 1337
+        assert ext.entries[1].value.values[0] == 1337
         # L_TEST = 113355 (int32)
-        assert struct.unpack("<i", ext.entries[2].value)[0] == 113355
+        assert ext.entries[2].value.values[0] == 113355
         # X_TEST = 987654321 (int64)
-        assert struct.unpack("<q", ext.entries[3].value)[0] == 987654321
-        # F_TEST ≈ 0.12345 (float32)
-        assert abs(struct.unpack("<f", ext.entries[4].value)[0] - 0.12345) < 1e-4
-        # D_TEST ≈ 9.87654321 (float64)
-        assert abs(struct.unpack("<d", ext.entries[5].value)[0] - 9.87654321) < 1e-8
+        assert ext.entries[3].value.values[0] == 987654321
+        # F_TEST = 0.12345 (float32)
+        assert abs(ext.entries[4].value.values[0] - 0.12345) < 1e-4
+        # D_TEST = 9.87654321 (float64)
+        assert abs(ext.entries[5].value.values[0] - 9.87654321) < 1e-8
         # STRING_TEST = "Hello World" (ASCII)
-        assert ext.entries[7].value == b"Hello World"
+        assert ext.entries[7].value.text == "Hello World"
         # STRING_TEST = "Goodbye World" (ASCII)
-        assert ext.entries[9].value == b"Goodbye World"
+        assert ext.entries[9].value.text == "Goodbye World"
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +497,10 @@ class TestCdifFile:
         assert self.p.data_rep == "EEEI"
 
     def test_type(self):
-        # type 1001 is not in the standard enum, raw int value
-        assert self.p.header.type == 1001
+        # type 1001 (uniformly sampled amplitude data) is now recognised and
+        # dispatched via its structure class (1001 / 1000 == 1).
+        assert self.p.header.type == MidasBlue.FileType.type_1001_amplitude
+        assert self.p.header.type_class == 1
 
     def test_format(self):
         assert self.p.header.format == "CF"
@@ -520,11 +527,34 @@ class TestCdifFile:
     def test_keyword_count(self):
         assert len(self.p.extended_header.entries) == 62
 
-    def test_adjunct_is_unknown(self):
-        """Type 1001 should fall through to the default adjunct case."""
+    def test_adjunct_is_1000_family(self):
+        """Type 1001 dispatches to the 1000-family adjunct (was previously
+        mis-classified as an unknown adjunct)."""
         adj = self.p.adjunct
-        # Should be raw bytes (unknown type), not a named adjunct subtype
-        assert hasattr(adj, 'raw_data') or isinstance(adj, bytes) or type(adj).__name__ == 'AdjunctUnknown'
+        assert isinstance(adj, MidasBlue.Adjunct1000)
+        assert abs(adj.xstart - 0.12667871432857147) < 1e-12
+        assert abs(adj.xdelta - 5.714285714285714e-07) < 1e-18
+        assert adj.xunits == MidasBlue.UnitCode.time
+
+    def test_hcb_keywords_parsed(self):
+        """Main-header keywords are parsed into tag/value string pairs."""
+        kws = {e.tag: e.value for e in self.p.header.keywords_parsed.entries}
+        assert kws["IO"] == "Sceptre"
+        assert kws["VER"] == "2.0"
+        assert kws["TC_PREC"] == "0"
+
+    def test_extended_keywords_typed(self):
+        """Extended-header keyword values are interpreted per their type code."""
+        by_tag = {e.tag: e for e in self.p.extended_header.entries}
+        # RF_FREQ is a float64 -> exposed as a numeric array
+        assert by_tag["RF_FREQ"].kw_type == "D"
+        assert by_tag["RF_FREQ"].value.values[0] == 906858500.0
+        # TIME_EPOCH is ASCII -> exposed as text
+        assert by_tag["TIME_EPOCH"].kw_type == "A"
+        assert by_tag["TIME_EPOCH"].value.text == "2025-06-20T18:35:52Z"
+        # SCEPTRE_CHANNEL is int32 -> numeric array
+        assert by_tag["SCEPTRE_CHANNEL"].kw_type == "L"
+        assert by_tag["SCEPTRE_CHANNEL"].value.values == [1]
 
     def test_timecode(self):
         assert self.p.header.timecode == 2381596552.0
@@ -550,10 +580,35 @@ class TestKscCompilation:
         failures = []
         for target in targets:
             result = subprocess.run(
-                ["ksc", "-t", target, ksy_path],
+                ["kaitai-struct-compiler", "-t", target, ksy_path],
                 capture_output=True,
                 text=True,
             )
             if result.returncode != 0:
                 failures.append(f"{target}: {result.stderr.strip()}")
         assert not failures, "ksc compilation failures:\n" + "\n".join(failures)
+
+
+# ---------------------------------------------------------------------------
+# Enum correctness against spec Table 29 (unit codes)
+# ---------------------------------------------------------------------------
+class TestUnitCodeEnum:
+    """Lock in the corrected unit_code enum values (spec Table 29)."""
+
+    def test_low_codes(self):
+        assert MidasBlue.UnitCode.none.value == 0
+        assert MidasBlue.UnitCode.time.value == 1
+        assert MidasBlue.UnitCode.frequency.value == 3
+        assert MidasBlue.UnitCode.distance.value == 5
+
+    def test_power_and_mass(self):
+        # Previously (incorrectly) 12/13/14 were latitude/longitude/altitude.
+        assert MidasBlue.UnitCode.power.value == 12
+        assert MidasBlue.UnitCode.mass.value == 13
+        assert MidasBlue.UnitCode.volume.value == 14
+
+    def test_geographic_codes(self):
+        assert MidasBlue.UnitCode.latitude.value == 60
+        assert MidasBlue.UnitCode.longitude.value == 61
+        assert MidasBlue.UnitCode.altitude_feet.value == 62
+        assert MidasBlue.UnitCode.altitude_meters.value == 63

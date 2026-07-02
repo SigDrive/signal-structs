@@ -215,7 +215,7 @@ class TestHeaderByteOrder:
 
 # --- Adjunct header helpers ---
 
-UNIT_CODES = st.integers(min_value=0, max_value=24)
+UNIT_CODES = st.sampled_from([0, 1, 2, 3, 5, 12, 32, 33, 34, 60, 61, 63])
 FILE_TYPES = st.sampled_from([1000, 2000, 3000, 4000, 5000, 6000])
 
 
@@ -255,10 +255,11 @@ def build_adjunct_3000(endian, xstart, xdelta, xunits, subsize, ystart, ydelta, 
     return bytes(buf)
 
 
-def build_adjunct_4000(endian, vrec_size):
-    """Build 256-byte adjunct for type 4000."""
+def build_adjunct_4000(endian, nrecords, vrecord_length):
+    """Build 256-byte adjunct for type 4000 (nrecords@20, vrecord_length@44)."""
     buf = bytearray(256)
-    struct.pack_into(f"{endian}i", buf, 0, vrec_size)
+    struct.pack_into(f"{endian}i", buf, 20, nrecords)
+    struct.pack_into(f"{endian}i", buf, 44, vrecord_length)
     return bytes(buf)
 
 
@@ -336,27 +337,28 @@ class TestAdjunctDispatch:
         parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
         adj = parsed.adjunct
         assert isinstance(adj, MidasBlue.Adjunct3000)
-        assert adj.xstart == xstart
-        assert adj.xdelta == xdelta
-        assert adj.xunits == MidasBlue.UnitCode(xunits)
-        assert adj.subsize == subsize
-        assert adj.ystart == ystart
-        assert adj.ydelta == ydelta
-        assert adj.yunits == MidasBlue.UnitCode(yunits)
+        assert adj.rstart == xstart
+        assert adj.rdelta == xdelta
+        assert adj.runits == MidasBlue.UnitCode(xunits)
+        assert adj.subrecords == subsize
+        assert adj.r2start == ystart
+        assert adj.r2delta == ydelta
+        assert adj.r2units == MidasBlue.UnitCode(yunits)
         assert adj.record_length == record_length
+        assert len(adj.subr) == 26
 
-    @given(head_rep=HEAD_REPS, vrec_size=S4)
+    @given(head_rep=HEAD_REPS, nrecords=S4, vrecord_length=S4)
     @settings(max_examples=200)
-    def test_adjunct_4000(self, head_rep, vrec_size):
-        """Type 4000: vrec_size and reserved."""
+    def test_adjunct_4000(self, head_rep, nrecords, vrecord_length):
+        """Type 4000: nrecords (offset 20) and vrecord_length (offset 44)."""
         endian = ">" if head_rep == "IEEE" else "<"
-        adjunct = build_adjunct_4000(endian, vrec_size)
+        adjunct = build_adjunct_4000(endian, nrecords, vrecord_length)
         raw = build_file_with_adjunct(head_rep, 4000, adjunct)
         parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
         adj = parsed.adjunct
         assert isinstance(adj, MidasBlue.Adjunct4000)
-        assert adj.vrec_size == vrec_size
-        assert len(adj.reserved) == 252
+        assert adj.nrecords == nrecords
+        assert adj.vrecord_length == vrecord_length
 
     @given(
         head_rep=HEAD_REPS, xstart=F8, xdelta=F8, xunits=UNIT_CODES,
@@ -371,24 +373,25 @@ class TestAdjunctDispatch:
         parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
         adj = parsed.adjunct
         assert isinstance(adj, MidasBlue.Adjunct5000)
-        assert adj.xstart == xstart
-        assert adj.xdelta == xdelta
-        assert adj.xunits == MidasBlue.UnitCode(xunits)
-        assert adj.subsize == subsize
-        assert adj.ystart == ystart
-        assert adj.ydelta == ydelta
-        assert adj.yunits == MidasBlue.UnitCode(yunits)
+        assert adj.tstart == xstart
+        assert adj.tdelta == xdelta
+        assert adj.tunits == MidasBlue.UnitCode(xunits)
+        assert adj.components == subsize
         assert adj.record_length == record_length
+        assert len(adj.comp) == 14
+        assert len(adj.quadwords) == 12
 
     @given(head_rep=HEAD_REPS, raw_data=st.binary(min_size=256, max_size=256))
     @settings(max_examples=200)
     def test_adjunct_6000(self, head_rep, raw_data):
-        """Type 6000: 256 bytes of raw data."""
+        """Type 6000: 3000-style numeric header plus an undecoded 208-byte
+        column region (its authoritative layout lives in SUBREC_DEF)."""
         raw = build_file_with_adjunct(head_rep, 6000, raw_data)
         parsed = MidasBlue(KaitaiStream(BytesIO(raw)))
         adj = parsed.adjunct
         assert isinstance(adj, MidasBlue.Adjunct6000)
-        assert adj.raw_data == raw_data
+        # The numeric header occupies the first 48 bytes; the rest is raw.
+        assert adj.subr_raw == raw_data[48:]
 
 
 # Format digraph extraction
@@ -531,8 +534,12 @@ def keyword_entries_list(draw):
             min_size=1, max_size=20,
         ))
         kw_type_char = draw(st.sampled_from(KW_TYPE_CHARS))
-        # Value: 1-50 random bytes
-        value_bytes = draw(st.binary(min_size=1, max_size=50))
+        # ASCII-range bytes: valid for the 'A' (text) type and equally fine for
+        # the numeric types (which accept any bytes).
+        value_bytes = bytes(
+            draw(st.lists(st.integers(min_value=0, max_value=127),
+                          min_size=1, max_size=50))
+        )
         entries.append((tag_str, kw_type_char, value_bytes))
     return entries
 
@@ -613,7 +620,12 @@ class TestKeywordEntryParsing:
             assert entry.lext == lext_expected
             assert entry.ltag == len(tag_str)
             assert entry.kw_type == kw_type_char
-            assert entry.value == value_bytes
+            # Typed values expose the original bytes via `_raw_value`;
+            # uninterpreted types keep raw bytes on `value` itself.
+            raw = getattr(entry, "_raw_value", None)
+            if raw is None:
+                raw = entry.value
+            assert raw == value_bytes
             assert entry.tag == tag_str
 
             # Verify padding achieves 8-byte alignment
